@@ -1,0 +1,110 @@
+name: Build LV2 Bundles
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+  pull_request:
+
+jobs:
+  build-windows-msvc:
+    name: Windows x64 (MSVC)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Faust architecture headers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path third_party | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/grame-cncm/faust/archive/refs/heads/master-dev.zip" -OutFile "third_party/faust.zip"
+          Expand-Archive -Path "third_party/faust.zip" -DestinationPath "third_party" -Force
+          New-Item -ItemType Directory -Force -Path "third_party/faust/include" | Out-Null
+          Copy-Item -Recurse -Force "third_party/faust-master-dev/architecture/faust" "third_party/faust/include/faust"
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build-msvc -G "Visual Studio 17 2022" -A x64 `
+            -DFAUST_INCLUDE_DIR="${{ github.workspace }}/third_party/faust/include" `
+            -DYC20_LV2_BUNDLE_DIR="$env:USERPROFILE/.lv2/foo-yc20.lv2"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build-msvc --config Release
+
+      - name: Run headless test
+        shell: pwsh
+        run: cmake --build build-msvc --config Release --target test-headless
+
+      - name: Package LV2 bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path dist/foo-yc20.lv2 | Out-Null
+          Copy-Item "build-msvc/Release/foo-yc20.dll" "dist/foo-yc20.lv2/foo-yc20.dll" -Force
+          Copy-Item "src/foo-yc20.lv2/foo-yc20.ttl" "dist/foo-yc20.lv2/foo-yc20.ttl" -Force
+          Copy-Item "build-msvc/foo-yc20.lv2/manifest.ttl" "dist/foo-yc20.lv2/manifest.ttl" -Force
+          Compress-Archive -Path "dist/foo-yc20.lv2" -DestinationPath "dist/foo-yc20-lv2-windows-x64.zip" -Force
+          Get-FileHash "dist/foo-yc20-lv2-windows-x64.zip" -Algorithm SHA256 | ForEach-Object {
+            "$($_.Hash.ToLower())  foo-yc20-lv2-windows-x64.zip" | Out-File -FilePath "dist/sha256sums.txt" -Encoding ascii
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo-yc20-lv2-windows-x64
+          path: |
+            dist/foo-yc20-lv2-windows-x64.zip
+            dist/sha256sums.txt
+
+  build-linux-arm64:
+    name: Linux ARM64 (Raspberry Pi target)
+    runs-on: ubuntu-latest-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential
+
+      - name: Download Faust architecture headers
+        run: |
+          mkdir -p third_party
+          curl -L https://github.com/grame-cncm/faust/archive/refs/heads/master-dev.tar.gz -o third_party/faust.tar.gz
+          tar -xzf third_party/faust.tar.gz -C third_party
+          mkdir -p third_party/faust/include
+          cp -r third_party/faust-master-dev/architecture/faust third_party/faust/include/faust
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-arm64 -G Ninja \
+            -DFAUST_INCLUDE_DIR="$GITHUB_WORKSPACE/third_party/faust/include" \
+            -DYC20_LV2_BUNDLE_DIR="$HOME/.lv2/foo-yc20.lv2"
+
+      - name: Build
+        run: cmake --build build-arm64
+
+      - name: Run headless test
+        run: cmake --build build-arm64 --target test-headless
+
+      - name: Package LV2 bundle
+        run: |
+          mkdir -p dist/foo-yc20.lv2
+          cp build-arm64/foo-yc20.so dist/foo-yc20.lv2/foo-yc20.so
+          cp src/foo-yc20.lv2/foo-yc20.ttl dist/foo-yc20.lv2/foo-yc20.ttl
+          cp build-arm64/foo-yc20.lv2/manifest.ttl dist/foo-yc20.lv2/manifest.ttl
+          (cd dist && zip -r foo-yc20-lv2-linux-arm64.zip foo-yc20.lv2)
+          (cd dist && sha256sum foo-yc20-lv2-linux-arm64.zip > sha256sums.txt)
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: foo-yc20-lv2-linux-arm64
+          path: |
+            dist/foo-yc20-lv2-linux-arm64.zip
+            dist/sha256sums.txt

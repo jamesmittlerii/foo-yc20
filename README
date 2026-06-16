@@ -60,6 +60,25 @@ MSVC helper:
 - `.\build-windows-msvc.ps1` wraps the same CMake configure/build/test/install flow
 - `.\build-windows-msvc.ps1 -TestOnly` runs only the test target
 
+CMake presets (short commands):
+
+- Configure once in a VS dev-enabled shell:
+  - `cmake --preset windows-msvc`
+- Build:
+  - `cmake --build --preset windows-msvc-release`
+- Run headless test:
+  - `cmake --build --preset windows-msvc-release --target test-headless`
+- Install:
+  - `cmake --install build-msvc`
+
+GitHub Actions artifacts:
+
+- Workflow: `.github/workflows/lv2-build.yml`
+- Produces zipped LV2 bundles for:
+  - Windows x64 (MSVC): `foo-yc20-lv2-windows-x64.zip`
+  - Linux ARM64 (Raspberry Pi target): `foo-yc20-lv2-linux-arm64.zip`
+- Each artifact includes a `sha256sums.txt` checksum file
+
 Linux/Raspberry Pi:
 
 - Configure:
