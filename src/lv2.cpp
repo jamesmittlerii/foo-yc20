@@ -33,6 +33,7 @@ ADVISEDOF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <string.h>
 #include <assert.h>
+#include <cstdio>
 
 #include <lv2/lv2plug.in/ns/lv2core/lv2.h>
 #include <lv2/lv2plug.in/ns/ext/atom/atom.h>
@@ -77,6 +78,7 @@ static LV2_Handle instantiate_FooYC20 (
 	LV2_URID_Map *map_feature = NULL;
 
 	if (!host_features) {
+		fprintf(stderr, "foo-yc20: instantiate failed (no host features)\n");
 		delete handle;
 		return NULL;
 	}
@@ -88,6 +90,7 @@ static LV2_Handle instantiate_FooYC20 (
 	}
 
 	if (!map_feature) {
+		fprintf(stderr, "foo-yc20: instantiate failed (missing http://lv2plug.in/ns/ext/urid#map)\n");
 		delete handle;
 		return NULL;
 	}
@@ -99,13 +102,21 @@ static LV2_Handle instantiate_FooYC20 (
 	handle->yc20 = new YC20Processor();
 	handle->yc20->setDSP(tmp);
 
-	//Try loading oscillator data from cache file... 
-	std::string fpath=DEFAULT_CONFIG_DIR + "/.precalc_osc.dat";
+	// Cache precalc data inside the LV2 bundle (works when HOME is unset).
+	std::string fpath = (bundle_path && bundle_path[0])
+		? std::string(bundle_path) + "/.precalc_osc.dat"
+		: DEFAULT_CONFIG_DIR + "/.precalc_osc.dat";
 	getUserData(tmp)->osc=yc20_load_precalc_osc(sample_rate,fpath.c_str());
 
 	//If not, precalculate and save to cache ...
 	if (!getUserData(tmp)->osc) {
 		getUserData(tmp)->osc = yc20_precalc_oscillators(sample_rate);
+		if (!getUserData(tmp)->osc) {
+			fprintf(stderr, "foo-yc20: instantiate failed (oscillator precalc)\n");
+			delete handle->yc20;
+			delete handle;
+			return NULL;
+		}
 		yc20_save_precalc_osc(getUserData(tmp)->osc,fpath.c_str());
 	}
 

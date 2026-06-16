@@ -34,6 +34,26 @@ ADVISEDOF THE POSSIBILITY OF SUCH DAMAGE.
 #include <cstdlib>
 #include <string>
 
+#if !defined(_WIN32) && !defined(__WIN32__)
+#include <unistd.h>
+#include <pwd.h>
+
+static inline std::string yc20_get_unix_home()
+{
+	const char *home = getenv("HOME");
+	if (home && *home) {
+		return std::string(home);
+	}
+
+	const passwd *pw = getpwuid(getuid());
+	if (pw && pw->pw_dir && pw->pw_dir[0]) {
+		return std::string(pw->pw_dir);
+	}
+
+	return std::string("/tmp");
+}
+#endif
+
 #define YC20_PNG_DIR "graphics/"
 
 
@@ -48,7 +68,8 @@ ADVISEDOF THE POSSIBILITY OF SUCH DAMAGE.
 #ifdef __APPLE__
 //#warning "Selected OS X directories"
 
-#define DEFAULT_CONFIG_DIR std::string(getenv("HOME")) + "/Library/Application Support/foo-yc20/"
+#define DEFAULT_CONFIG_DIR \
+	(yc20_get_unix_home() + "/Library/Application Support/foo-yc20/")
 
 #endif
 
@@ -85,7 +106,7 @@ static inline std::string yc20_get_windows_home()
 #ifndef DEFAULT_CONFIG_DIR
 //#warning "Selected Linux/UNIX directories"
 
-#define DEFAULT_CONFIG_DIR std::string(getenv("HOME")) + "/.foo-yc20"
+#define DEFAULT_CONFIG_DIR (yc20_get_unix_home() + "/.foo-yc20")
 #endif
 
 

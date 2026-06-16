@@ -94,6 +94,16 @@ jobs:
       - name: Build
         run: cmake --build build-arm64
 
+      - name: Verify Pi-compatible linkage
+        run: |
+          set -euo pipefail
+          if ldd build-arm64/foo-yc20.so | grep -q 'libstdc++'; then
+            echo "ERROR: foo-yc20.so still dynamically links libstdc++:" >&2
+            ldd build-arm64/foo-yc20.so >&2
+            exit 1
+          fi
+          echo "OK: no dynamic libstdc++ dependency"
+
       - name: Run headless test
         run: cmake --build build-arm64 --target test-headless
 
