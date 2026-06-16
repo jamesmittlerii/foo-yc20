@@ -68,7 +68,7 @@ jobs:
 
   build-linux-arm64:
     name: Linux ARM64 (Raspberry Pi target)
-    runs-on: ubuntu-latest-arm64
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
