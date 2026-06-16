@@ -77,7 +77,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: apt-get update && apt-get install -y cmake ninja-build build-essential curl binutils
+        run: apt-get update && apt-get install -y cmake ninja-build build-essential curl binutils bash
 
       - name: Download Faust architecture headers
         run: |
@@ -97,6 +97,7 @@ jobs:
         run: cmake --build build-arm64
 
       - name: Verify Pi-compatible linkage
+        shell: bash
         run: |
           set -euo pipefail
           so=build-arm64/foo-yc20.so
