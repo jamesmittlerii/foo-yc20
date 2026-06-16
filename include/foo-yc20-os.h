@@ -31,6 +31,8 @@ ADVISEDOF THE POSSIBILITY OF SUCH DAMAGE.
 #ifndef _YC20_OS_H
 #define _YC20_OS_H
 
+#include <cstdlib>
+#include <string>
 
 #define YC20_PNG_DIR "graphics/"
 
@@ -50,14 +52,32 @@ ADVISEDOF THE POSSIBILITY OF SUCH DAMAGE.
 
 #endif
 
-#ifdef __WIN32__
+#if defined(_WIN32) || defined(__WIN32__)
 //#warning "Selected WIN32 directories"
 
+static inline std::string yc20_get_windows_home()
+{
+	const char *userProfile = getenv("USERPROFILE");
+	if (userProfile && *userProfile) {
+		return std::string(userProfile);
+	}
+
+	const char *homeDrive = getenv("HOMEDRIVE");
+	const char *homePath = getenv("HOMEPATH");
+	if (homeDrive && *homeDrive && homePath && *homePath) {
+		return std::string(homeDrive) + std::string(homePath);
+	}
+
+	const char *home = getenv("HOME");
+	if (home && *home) {
+		return std::string(home);
+	}
+
+	return std::string(".");
+}
+
 #define DEFAULT_CONFIG_DIR \
-  std::string( \
-    getenv("HOMEPATH")?getenv("HOMEPATH"): \
-      (getenv("HOME")?getenv("HOME"):"") \
-  ) + "\\foo-yc20"
+  yc20_get_windows_home() + "\\foo-yc20"
 
 #endif
 

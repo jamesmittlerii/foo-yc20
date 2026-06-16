@@ -5,7 +5,7 @@ DATADIR=$(PREFIX)/share
 LV2_PATH=$(LIBDIR)/lv2
 DESKTOPDIR=$(DATADIR)/applications
 VERSION=
-FAUST=faust
+FAUST?=faust
 PKG_CONFIG=pkg-config
 OS=$(shell uname)
 VSTSDK=./vstsdk2.4
@@ -22,8 +22,10 @@ OBJS_CAIRO=src/yc20-base-ui.o
 OBJS_DSP_STANDALONE=src/faust-dsp-standalone.o
 OBJS_DSP_PLUGIN=src/faust-dsp-plugin.o
 
-LV2_PLUGIN=src/foo-yc20.lv2/foo-yc20.so
-LV2_UI=src/foo-yc20.lv2/foo-yc20-lv2ui.so
+LV2_PLUGIN_BASENAME=foo-yc20.so
+LV2_BUILD_BUNDLE_DIR=build/lv2/foo-yc20.lv2
+LV2_PLUGIN=$(LV2_BUILD_BUNDLE_DIR)/$(LV2_PLUGIN_BASENAME)
+LV2_UI=$(LV2_BUILD_BUNDLE_DIR)/foo-yc20-lv2ui.so
 
 ifeq ($(CFLAGS),)
 ifeq ($(OS), Darwin)
@@ -35,9 +37,23 @@ endif
 
 CFLAGS_X = $(CFLAGS) -fPIC -DVERSION=$(VERSION) -Isrc/ -Iinclude/ -DPREFIX=$(PREFIX) -Wall
 
-ifneq ($(findstring MINGW, $(OS)),)
+FAUST_INCLUDEDIR?=/e/Program\ Files/Faust/include
+ifneq ($(wildcard $(FAUST_INCLUDEDIR)/faust/dsp/dsp.h),)
+CFLAGS_X += -I$(FAUST_INCLUDEDIR)
+endif
+
+ifneq ($(wildcard /e/Program\ Files/Faust/bin/faust.exe),)
+FAUST := /e/Program\ Files/Faust/bin/faust.exe
+endif
+
+ifneq (,$(filter MINGW% MSYS%,$(OS)))
 CFLAGS_X += -D_USE_MATH_DEFINES=1
 CFLAGS_X += -DWIN32=1
+LV2_PLUGIN_BASENAME=foo-yc20.dll
+LDFLAGS_YC20_LV2 += -static -static-libgcc -static-libstdc++ -Wl,-Bstatic -lstdc++ -lgcc -Wl,-Bdynamic
+MINGW_LIBSTDCPP := $(shell $(CXX) -print-file-name=libstdc++-6.dll)
+MINGW_LIBGCC := $(shell $(CXX) -print-file-name=libgcc_s_seh-1.dll)
+MINGW_LIBWINPTHREAD := $(shell $(CXX) -print-file-name=libwinpthread-1.dll)
 else
 CFLAGS_X += -D__cdecl=
 endif
@@ -57,9 +73,10 @@ $(OBJS_DSP_STANDALONE) $(OBJS_DSP_PLUGIN): CFLAGS_use = $(CFLAGS_X)
 .c.o:
 	$(CXX11) $< $(CFLAGS_use) -c -o $@
 
-all: foo-yc20 foo-yc20-cli lv2
+all: foo-yc20 foo-yc20-cli lv2-headless
 
-lv2: $(LV2_PLUGIN) $(LV2_UI)
+lv2: lv2-headless
+lv2-headless: $(LV2_PLUGIN)
 
 ## GUI version
 OBJS_FOO_YC20=src/foo-yc20.o src/configuration.o src/yc20-jack.o src/main-gui.o src/foo-yc20-ui.o src/yc20-base-ui.o src/graphics.o src/yc20-precalc.o $(WIN32_RC)
@@ -77,12 +94,14 @@ foo-yc20-cli: $(OBJS_FOO_YC20_CLI) $(OBJS_DSP_STANDALONE)
 OBJS_LV2=src/lv2.o src/foo-yc20.o src/yc20-precalc.o
 
 $(LV2_PLUGIN): $(OBJS_LV2) $(OBJS_DSP_PLUGIN)
+	mkdir -p $(LV2_BUILD_BUNDLE_DIR)
 	$(CXX11) $(OBJS_LV2) $(OBJS_DSP_PLUGIN) -fPIC -shared -o $(LV2_PLUGIN) $(LDFLAGS_YC20_LV2)
 
 ## LV2 UI
 OBJS_LV2_UI=src/lv2-ui.o src/foo-yc20-ui2.o src/yc20-base-ui.o src/graphics.o
 
 $(LV2_UI): $(OBJS_LV2_UI)
+	mkdir -p $(LV2_BUILD_BUNDLE_DIR)
 	$(CXX11) $(OBJS_LV2_UI) -fPIC -shared `$(PKG_CONFIG) --libs gtk+-2.0` -o $(LV2_UI) $(LDFLAGS_YC20_LV2)
 
 ## VSTi - only compiles for windows with MinGW32. 
@@ -155,22 +174,29 @@ clean: cb
 	rm -f $(OBJS_DSP_STANDALONE) $(OBJS_DSP_PLUGIN)
 
 cb:
-	rm -f foo-yc20 foo-yc20-cli $(LV2_PLUGIN) $(LV2_UI) FooYC20.dll
+	rm -f foo-yc20 foo-yc20-cli src/foo-yc20.lv2/foo-yc20.so src/foo-yc20.lv2/foo-yc20.dll $(LV2_PLUGIN) $(LV2_UI) FooYC20.dll
 	rm -f $(OBJS_FOO_YC20) $(OBJS_FOO_YC20_CLI) $(OBJS_LV2) $(OBJS_LV2_UI) $(OBJS_VSTI)
 	rm -f src/jackringbuffer.o src/osxresources.o vstosx
+	rm -f tests/headless-dsp-test
 
 
-install: foo-yc20
-	install -Dm 755 foo-yc20 $(DESTDIR)$(BINDIR)/foo-yc20
-	install -Dm 755 foo-yc20-cli $(DESTDIR)$(BINDIR)/foo-yc20-cli
-	install -d $(DESTDIR)$(DATADIR)/foo-yc20/graphics
-	install -m 644 graphics/icon.png $(DESTDIR)$(DATADIR)/foo-yc20/graphics
-	cat foo-yc20.desktop.in | sed 's!%PREFIX%!$(PREFIX)!' > foo-yc20.desktop
-	install -Dm 644 foo-yc20.desktop $(DESTDIR)$(DESKTOPDIR)/foo-yc20.desktop
-	rm foo-yc20.desktop
+install: lv2-headless
 	install -d $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2
-	install -m 755 src/foo-yc20.lv2/*.so $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2
+	install -m 755 $(LV2_PLUGIN) $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2
 	install -m 644 src/foo-yc20.lv2/*.ttl $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2
+ifneq (,$(filter MINGW% MSYS%,$(OS)))
+	rm -f $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2/foo-yc20.so
+	perl -0777 -i -pe 's/lv2:binary\s*<foo-yc20\.so>\s*;/lv2:binary      <foo-yc20.dll>;/' "$(DESTDIR)$(LV2_PATH)/foo-yc20.lv2/manifest.ttl"
+ifneq ($(MINGW_LIBSTDCPP),libstdc++-6.dll)
+	install -m 755 "$(MINGW_LIBSTDCPP)" $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2
+endif
+ifneq ($(MINGW_LIBGCC),libgcc_s_seh-1.dll)
+	install -m 755 "$(MINGW_LIBGCC)" $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2
+endif
+ifneq ($(MINGW_LIBWINPTHREAD),libwinpthread-1.dll)
+	install -m 755 "$(MINGW_LIBWINPTHREAD)" $(DESTDIR)$(LV2_PATH)/foo-yc20.lv2
+endif
+endif
 
 
 uninstall:
@@ -204,6 +230,19 @@ testit: faust/test.dsp faust/oscillator.dsp src/polyblep.cpp Makefile
 	rm -rf faust/test-svg/
 	$(FAUST) -svg -a sndfile.cpp faust/test.dsp > gen/test.cpp
 	$(CXX11) $(CFLAGS) -Isrc/ gen/test.cpp `$(PKG_CONFIG) --cflags --libs sndfile` -o testit
+
+HEADLESS_TEST_EXE=tests/headless-dsp-test
+HEADLESS_TEST_OBJS=tests/headless-dsp-test.o src/foo-yc20.o src/yc20-precalc.o src/faust-dsp-plugin.o
+
+tests/headless-dsp-test.o: CFLAGS_use = $(CFLAGS_X)
+
+$(HEADLESS_TEST_EXE): $(HEADLESS_TEST_OBJS)
+	$(CXX11) $(HEADLESS_TEST_OBJS) -o $(HEADLESS_TEST_EXE)
+
+headless-test: $(HEADLESS_TEST_EXE)
+	./$(HEADLESS_TEST_EXE)
+
+test: headless-test
 
 $(OBJS_NODEPS) $(OBJS_JACK) $(OBJS_GTKJACK) $(OBJS_LV2) $(OBJS_CAIRO): include/*.h
 src/graphics.o: include/graphics-png.h
