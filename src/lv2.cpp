@@ -53,6 +53,7 @@ struct YC20_Handle_t {
 	// Registered ports
 	float *outputPorts[2];
 	const LV2_Atom_Sequence *eventPort;
+	float *enabled;
 	std::map<Control *, float *> controlParameters;
 
 	// MIDI
@@ -70,6 +71,7 @@ static LV2_Handle instantiate_FooYC20 (
 	handle->outputPorts[0] = NULL;
 	handle->outputPorts[1] = NULL;
 	handle->eventPort = NULL;
+	handle->enabled = NULL;
 	handle->midi_event_id = 0;
 
 	LV2_URID_Map *map_feature = NULL;
@@ -127,9 +129,14 @@ static void connect_port_FooYC20 (
 		return;
 	}
 
+	if (port == 3) {
+		handle->enabled = (float *)data_location;
+		return;
+	}
+
 	Control *c = NULL;
 
-#define C_IDX 3
+#define C_IDX 4
 	switch(port) {
 		case C_IDX + 0: c = handle->yc20->getControl("pitch"); break;
 		case C_IDX + 1: c = handle->yc20->getControl("volume"); break;
@@ -186,6 +193,14 @@ static void run_FooYC20 (LV2_Handle instance, uint32_t nframes)
 	if (!outp[0] || !outp[1]) {
 		return;
 	}
+
+	// lv2:enabled — zero means bypassed (silence for this instrument).
+	if (handle->enabled && *handle->enabled <= 0.0f) {
+		memset(outp[0], 0, nframes * sizeof(float));
+		memset(outp[1], 0, nframes * sizeof(float));
+		return;
+	}
+
 	uint32_t frame = 0;
 
 	for (std::map<Control *, float *>::iterator i = handle->controlParameters.begin(); i != handle->controlParameters.end(); ++i) {
