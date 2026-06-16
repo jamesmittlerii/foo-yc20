@@ -56,8 +56,8 @@ if(WIN32)
   set_target_properties(foo-yc20-lv2 PROPERTIES SUFFIX ".dll")
 endif()
 
-# Raspberry Pi OS / Debian ship an older libstdc++ than Ubuntu 24.04 CI runners.
-# Statically link the C++ runtime so GHA-built ARM64 binaries load on the Pi.
+# Raspberry Pi OS / Debian ship older libstdc++ and glibc than Ubuntu 24.04 CI hosts.
+# Statically link the C++ runtime; build the ARM64 artifact in a Bookworm container (see CI).
 option(YC20_STATIC_LIBSTDCXX "Statically link libstdc++/libgcc on Unix LV2 builds" ON)
 if(YC20_STATIC_LIBSTDCXX AND UNIX AND NOT APPLE)
   target_link_options(foo-yc20-lv2 PRIVATE -static-libstdc++ -static-libgcc)

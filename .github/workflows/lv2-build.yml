@@ -69,13 +69,15 @@ jobs:
   build-linux-arm64:
     name: Linux ARM64 (Raspberry Pi target)
     runs-on: ubuntu-24.04-arm
+    # Match Raspberry Pi OS / Debian Bookworm glibc (2.36). Ubuntu 24.04 needs GLIBC_2.38+.
+    container: debian:bookworm
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build build-essential
+        run: apt-get update && apt-get install -y cmake ninja-build build-essential curl binutils
 
       - name: Download Faust architecture headers
         run: |
@@ -97,12 +99,24 @@ jobs:
       - name: Verify Pi-compatible linkage
         run: |
           set -euo pipefail
-          if ldd build-arm64/foo-yc20.so | grep -q 'libstdc++'; then
-            echo "ERROR: foo-yc20.so still dynamically links libstdc++:" >&2
-            ldd build-arm64/foo-yc20.so >&2
+          so=build-arm64/foo-yc20.so
+
+          if ldd "$so" | grep -q 'libstdc++'; then
+            echo "ERROR: $so still dynamically links libstdc++:" >&2
+            ldd "$so" >&2
             exit 1
           fi
           echo "OK: no dynamic libstdc++ dependency"
+
+          max_glibc=$(objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sed 's/GLIBC_//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+          target_glibc="2.36"
+          echo "Max GLIBC symbol version required: ${max_glibc:-none}"
+          if [ -n "$max_glibc" ] && [ "$(printf '%s\n' "$max_glibc" "$target_glibc" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" != "$max_glibc" ]; then
+            echo "ERROR: $so requires GLIBC > $target_glibc (too new for Raspberry Pi OS Bookworm)" >&2
+            objdump -T "$so" | grep GLIBC | sort -u >&2
+            exit 1
+          fi
+          echo "OK: GLIBC requirement is Pi-compatible (<= $target_glibc)"
 
       - name: Run headless test
         run: cmake --build build-arm64 --target test-headless
