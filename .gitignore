@@ -1,7 +1,50 @@
+# Object files
 src/*.o
+tests/*.o
 
+# Native binaries (repo root)
+/foo-yc20
+/foo-yc20-cli
+
+# VST plugins (build/vst/ is covered by build/ below)
+/FooYC20.dll
+/FooYC20_x64.dll
+/FooYC20.so
+/vstosx
+
+# Tests
+/tests/headless-dsp-test
+/tests/headless-dsp-test.exe
+
+# Build directories
+/build/
+/build-msvc/
+
+# CMake (in case artifacts land outside build dirs)
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.ninja
+.ninja_deps
+.ninja_log
+install_manifest.txt
+
+# MSVC link artifacts
+*.exp
+*.pdb
+*.ilk
+*.tlog/
+
+# Third-party SDKs (obtain separately; cannot be redistributed)
+vstsdk2.4/
+jack-1.9.6/
+
+# Web frontend
 web/bower_components
 web/node_modules
 web/css
 web/target
 
+# IDE
+.vs/
+.vscode/

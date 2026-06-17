@@ -8,8 +8,27 @@ VERSION=
 FAUST=faust
 PKG_CONFIG=pkg-config
 OS=$(shell uname)
+BUILD_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null)
 VSTSDK=./vstsdk2.4
 JACKSDK=./jack-1.9.6
+
+# <jack/ringbuffer.h> from vendored jack sources, or MSYS2 jack2 if installed.
+ifeq ($(wildcard $(JACKSDK)/jack/ringbuffer.h),$(JACKSDK)/jack/ringbuffer.h)
+JACK_CFLAGS = -I$(JACKSDK)
+else ifneq ($(wildcard $(JACKSDK)/include/jack/ringbuffer.h),)
+JACK_CFLAGS = -I$(JACKSDK)/include
+else ifneq ($(shell $(PKG_CONFIG) --exists jack 2>/dev/null && echo yes),)
+JACK_CFLAGS = `$(PKG_CONFIG) --cflags jack`
+else
+JACK_CFLAGS = `$(PKG_CONFIG) --cflags jack2`
+endif
+
+# jack1: libjack/ringbuffer.c — older jack: common/ringbuffer.c
+ifeq ($(wildcard $(JACKSDK)/libjack/ringbuffer.c),$(JACKSDK)/libjack/ringbuffer.c)
+JACK_RINGBUFFER_C = $(JACKSDK)/libjack/ringbuffer.c
+else
+JACK_RINGBUFFER_C = $(JACKSDK)/common/ringbuffer.c
+endif
 
 CXX11 = $(CXX) -std=c++11
 
@@ -35,9 +54,23 @@ endif
 
 CFLAGS_X = $(CFLAGS) -fPIC -DVERSION=$(VERSION) -Isrc/ -Iinclude/ -DPREFIX=$(PREFIX) -Wall
 
-ifneq ($(findstring MINGW, $(OS)),)
+FAUST_INCLUDEDIR?=/e/Program\ Files/Faust/include
+ifneq ($(wildcard $(FAUST_INCLUDEDIR)/faust/dsp/dsp.h),)
+CFLAGS_X += -I$(FAUST_INCLUDEDIR)
+endif
+
+ifneq ($(wildcard /e/Program\ Files/Faust/bin/faust.exe),)
+FAUST := /e/Program\ Files/Faust/bin/faust.exe
+endif
+
+ifneq ($(findstring MINGW,$(OS))$(findstring mingw,$(BUILD_MACHINE)),)
 CFLAGS_X += -D_USE_MATH_DEFINES=1
-CFLAGS_X += -DWIN32=1
+CFLAGS_X += -DWIN32=1 -D__WIN32__=1
+CFLAGS_X += -DCAIRO_WIN32_STATIC_BUILD
+# Fully static cairo into the DLL (no MSYS2 libcairo-2.dll beside the plugin).
+VST_CAIRO_LIBS := $(filter-out -pthread,$(shell $(PKG_CONFIG) --static --libs cairo))
+VST_WINPTHREAD_LIBS := -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive
+VST_LINK_LIBS := -Wl,-Bstatic $(VST_CAIRO_LIBS) -liconv $(VST_WINPTHREAD_LIBS) -Wl,-Bdynamic -lkernel32 -luser32 -lgdi32 -lmsimg32 -lole32
 else
 CFLAGS_X += -D__cdecl=
 endif
@@ -85,25 +118,77 @@ OBJS_LV2_UI=src/lv2-ui.o src/foo-yc20-ui2.o src/yc20-base-ui.o src/graphics.o
 $(LV2_UI): $(OBJS_LV2_UI)
 	$(CXX11) $(OBJS_LV2_UI) -fPIC -shared `$(PKG_CONFIG) --libs gtk+-2.0` -o $(LV2_UI) $(LDFLAGS_YC20_LV2)
 
-## VSTi - only compiles for windows with MinGW32. 
-##        Note: Jack is used in compile flags to provide access to the ringbuffer.h. there
-##              is no runtime dependency or even a library as we use the separately compiled ringbuffer.o
+## VSTi - Windows via MinGW (32-bit in MSYS2 MinGW32, 64-bit in MSYS2 MinGW64).
+## Jack is only used at compile time for ringbuffer.h; runtime uses jackringbuffer.o.
 OBJS_VSTI_LINUX=src/vsti.o src/vstplugmain.o src/foo-yc20.o src/yc20-precalc.o src/yc20-base-ui.o src/graphics.o src/jackringbuffer.o
 OBJS_VSTI=src/vsti.o src/vstplugmain.o src/foo-yc20.o src/yc20-precalc.o src/yc20-base-ui.o src/graphics.o src/jackringbuffer.o $(WIN32_RC)
+
+VST_MACHINE := $(shell $(CXX) -dumpmachine 2>/dev/null)
+ifeq ($(findstring x86_64,$(VST_MACHINE)),x86_64)
+VST_DLL = FooYC20_x64.dll
+VST_ARCH = x86_64
+else ifeq ($(findstring i686,$(VST_MACHINE)),i686)
+VST_DLL = FooYC20.dll
+VST_ARCH = i686
+else
+VST_DLL = FooYC20.dll
+VST_ARCH = unknown
+endif
+
+VST_BUILD_DIR = build/vst
+VST_PLUGIN = $(VST_BUILD_DIR)/$(VST_DLL)
 
 $(WIN32_RC): src/win32.rc
 	$(WINDRES) src/win32.rc -o src/win32.o
 
-src/vsti.o src/vstplugmain.o: CFLAGS_use = $(CFLAGS_X) -I$(VSTSDK) -I$(VSTSDK)/public.sdk/source/vst2.x `$(PKG_CONFIG) --cflags cairo jack`
+VST_CFLAGS = -I$(VSTSDK) -I$(VSTSDK)/public.sdk/source/vst2.x -I$(VSTSDK)/pluginterfaces/vst2.x $(JACK_CFLAGS)
+
+src/vsti.o src/vstplugmain.o src/yc20-base-ui.o src/graphics.o: CFLAGS_use = $(CFLAGS_X) $(VST_CFLAGS) `$(PKG_CONFIG) --cflags cairo`
 
 src/vstplugmain.o: $(VSTSDK)/public.sdk/source/vst2.x/vstplugmain.cpp
-	$(CXX11) $(CFLAGS_use)  $(VSTSDK)/public.sdk/source/vst2.x/vstplugmain.cpp -c -o src/vstplugmain.o
+	$(CXX11) $(CFLAGS_use) $(VSTSDK)/public.sdk/source/vst2.x/vstplugmain.cpp -c -o src/vstplugmain.o
+
+vsti-check-deps:
+	@test -f "$(VSTSDK)/public.sdk/source/vst2.x/audioeffectx.h" || ( \
+		echo "Missing VST2 SDK at $(VSTSDK)"; \
+		echo "  Expected: $(VSTSDK)/public.sdk/source/vst2.x/audioeffectx.h"; \
+		echo "  Download Steinberg VST2 SDK 2.4 and extract/symlink as ./vstsdk2.4"; \
+		echo "  Or: make VSTSDK=/path/to/vstsdk2.4 vsti-windows64"; \
+		exit 1)
+	@test -f "$(VSTSDK)/pluginterfaces/vst2.x/aeffect.h" || ( \
+		echo "Missing $(VSTSDK)/pluginterfaces/vst2.x/aeffect.h"; \
+		echo "  Your VST SDK layout looks incomplete (need pluginterfaces/vst2.x/)"; \
+		exit 1)
+	@test -f "$(JACK_RINGBUFFER_C)" || ( \
+		echo "Missing ringbuffer.c under $(JACKSDK)"; \
+		echo "  Expected: libjack/ringbuffer.c (jack1) or common/ringbuffer.c (older jack)"; \
+		exit 1)
+	@if [ ! -f "$(JACKSDK)/jack/ringbuffer.h" ] && [ ! -f "$(JACKSDK)/include/jack/ringbuffer.h" ] && ! $(PKG_CONFIG) --exists jack 2>/dev/null && ! $(PKG_CONFIG) --exists jack2 2>/dev/null; then \
+		echo "Missing jack/ringbuffer.h under $(JACKSDK)"; \
+		echo "  jack1 uses a submodule: cd $(JACKSDK) && git submodule update --init --recursive"; \
+		echo "  Or: pacman -S mingw-w64-$(VST_ARCH)-jack2"; \
+		exit 1; \
+	fi
+	@$(PKG_CONFIG) --exists cairo || (echo "Missing cairo (MSYS2: pacman -S mingw-w64-$(VST_ARCH)-cairo)" && exit 1)
+	@echo "VST build arch: $(VST_ARCH) ($(VST_MACHINE)) -> $(VST_DLL)"
 
 vsti-linux: $(OBJS_VSTI_LINUX) $(OBJS_DSP_PLUGIN) src/vsti.def
-	$(CXX11) -Wall -s -shared $(CFLAGS) $(VSTFLAGS) $(OBJS_VSTI_LINUX) $(OBJS_DSP_PLUGIN) -o FooYC20.so `$(PKG_CONFIG) --libs cairo`
+	@mkdir -p $(VST_BUILD_DIR)
+	$(CXX11) -Wall -s -shared $(CFLAGS) $(VSTFLAGS) $(OBJS_VSTI_LINUX) $(OBJS_DSP_PLUGIN) -o $(VST_PLUGIN) `$(PKG_CONFIG) --libs cairo`
+	@echo "Built $(VST_PLUGIN)"
 
-vsti-windows: $(OBJS_VSTI) $(OBJS_DSP_PLUGIN) src/vsti.def
-	$(CXX11) -Wall -s -shared -mwindows -static $(CFLAGS) src/vsti.def $(VSTFLAGS) $(OBJS_VSTI) $(OBJS_DSP_PLUGIN) -o FooYC20.dll `$(PKG_CONFIG) --libs --static cairo`
+vsti-windows: vsti-check-deps $(OBJS_VSTI) $(OBJS_DSP_PLUGIN) src/vsti.def
+	@mkdir -p $(VST_BUILD_DIR)
+	$(CXX11) -Wall -s -shared -mwindows -static-libgcc -static-libstdc++ $(CFLAGS) src/vsti.def $(VSTFLAGS) $(OBJS_VSTI) $(OBJS_DSP_PLUGIN) -o $(VST_PLUGIN) $(VST_LINK_LIBS)
+	@echo "Built $(VST_PLUGIN) for $(VST_ARCH)"
+
+vsti-windows64:
+	@if ! echo "$(VST_MACHINE)" | grep -q x86_64; then \
+		echo "vsti-windows64 requires the MSYS2 MinGW64 shell (x86_64-w64-mingw32-g++)"; \
+		echo "Current compiler: $(CXX) -> $(VST_MACHINE)"; \
+		exit 1; \
+	fi
+	$(MAKE) vsti-windows
 
 $(BIN): $(OBJ)
 
@@ -129,12 +214,8 @@ include/graphics-png.h: graphics/background-black.png graphics/background-blue.p
 	xxd -i graphics/white_3.png >> include/graphics-png.h
 
 
-src/jackringbuffer.o: $(JACKSDK)/common/ringbuffer.c
-	$(CC) $(CFLAGS) \
-	-I$(JACKSDK)/posix/ \
-	-I$(JACKSDK)/common/ \
-	-c $(JACKSDK)/common/ringbuffer.c \
-	-o src/jackringbuffer.o
+src/jackringbuffer.o: $(JACK_RINGBUFFER_C)
+	$(CC) $(CFLAGS) $(JACK_CFLAGS) -Isrc/jack-build -c $(JACK_RINGBUFFER_C) -o src/jackringbuffer.o
 
 src/osxresources.o: ../tools/osx/src/osxresources.mm
 	$(CC) $(CFLAGS) -o src/osxresources.o -c ../tools/osx/src/osxresources.mm
@@ -155,9 +236,11 @@ clean: cb
 	rm -f $(OBJS_DSP_STANDALONE) $(OBJS_DSP_PLUGIN)
 
 cb:
-	rm -f foo-yc20 foo-yc20-cli $(LV2_PLUGIN) $(LV2_UI) FooYC20.dll
+	rm -f foo-yc20 foo-yc20-cli $(LV2_PLUGIN) $(LV2_UI)
+	rm -rf $(VST_BUILD_DIR)
+	rm -f FooYC20.dll FooYC20_x64.dll FooYC20.so vstosx
 	rm -f $(OBJS_FOO_YC20) $(OBJS_FOO_YC20_CLI) $(OBJS_LV2) $(OBJS_LV2_UI) $(OBJS_VSTI)
-	rm -f src/jackringbuffer.o src/osxresources.o vstosx
+	rm -f src/jackringbuffer.o src/osxresources.o
 
 
 install: foo-yc20
