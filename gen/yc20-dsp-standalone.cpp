@@ -2518,7 +2518,7 @@ class mydsp : public dsp {
 		float fSlow120 = 1.0f - fSlow104;
 		for (int i0 = 0; i0 < count; i0 = i0 + 1) {
 			fRec0[0] = fSlow0 + 0.98f * fRec0[1];
-			float fTemp0 = 0.05f * fRec0[0] + 0.001f;
+			float fTemp0 = 0.08f * fRec0[0] + 0.001f;
 			fRec1[0] = fSlow1 + 0.98f * fRec1[1];
 			fVec0[0] = fSlow2;
 			float fTemp1 = fSlow2 + fVec0[3] + fVec0[1] + fVec0[2];

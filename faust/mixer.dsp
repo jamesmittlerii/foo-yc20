@@ -61,7 +61,8 @@ manual_bass_vol = manual_bass_slider : (declick(50) ~ _);
 volume_curve(v) = v * v;
 volume          = volume_slider : volume_curve : (declick(50) ~ _);
 
-volume_control  = *(0.001 + 0.05 * volume);
+// 0.08 raises max output ~4 dB vs original 0.05
+volume_control  = *(0.001 + 0.08 * volume);
 
 // Mixer for the standalone client
 standalone_mixer = (mixer_treble, mixer_bass) : splitter

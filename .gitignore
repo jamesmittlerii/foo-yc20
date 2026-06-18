@@ -12,3 +12,10 @@ web/node_modules
 web/css
 web/target
 
+# Windows VST build output (repo root)
+FooYC20*.dll
+
+# Local SDK dependencies (download separately for VST/JACK builds)
+vstsdk2.4/
+jack-1.9.6/
+
