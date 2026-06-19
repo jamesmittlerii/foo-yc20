@@ -1,0 +1,23 @@
+Source: foo-yc20
+Section: sound
+Priority: optional
+Maintainer: James Mittler <jamesmittlerii@my.smccd.edu>
+Build-Depends: debhelper-compat (= 13),
+               cmake (>= 3.20),
+               ninja-build,
+               pkg-config,
+               curl,
+               ca-certificates
+Standards-Version: 4.6.2
+Homepage: https://github.com/jamesmittlerii/foo-yc20
+Rules-Requires-Root: no
+Vcs-Browser: https://github.com/jamesmittlerii/foo-yc20
+Vcs-Git: https://github.com/jamesmittlerii/foo-yc20.git
+
+Package: lv2-foo-yc20
+Architecture: any
+Provides: lv2-plugin
+Depends: ${misc:Depends}
+Description: Yamaha YC-20 combo organ LV2 instrument plugin
+ Faust implementation of the 1969 Yamaha YC-20 combo organ, packaged
+ as a headless LV2 instrument for use in compatible hosts.

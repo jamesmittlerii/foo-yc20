@@ -1,10 +1,22 @@
-name: Build LV2 Bundles
+name: LV2 build and release
 
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
+
+concurrency:
+  group: lv2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  APTREPO_SLUG: jamesmittlerii/aptrepo
+  APT_CODENAME: bookworm
+  FAUST_INCLUDE_DIR: ${{ github.workspace }}/third_party/faust/include
 
 jobs:
   build-windows-msvc:
@@ -13,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Download Faust architecture headers
         shell: pwsh
@@ -59,82 +71,295 @@ jobs:
           }
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: foo-yc20-lv2-windows-x64
           path: |
             dist/foo-yc20-lv2-windows-x64.zip
             dist/sha256sums.txt
 
-  build-linux-arm64:
-    name: Linux ARM64 (Raspberry Pi target)
-    runs-on: ubuntu-24.04-arm
-    # Match Raspberry Pi OS / Debian Bookworm glibc (2.36). Ubuntu 24.04 needs GLIBC_2.38+.
+  test:
+    name: Test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runs-on }}
     container: debian:bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-24.04
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install build tools
-        run: apt-get update && apt-get install -y cmake ninja-build build-essential curl binutils bash zip
+        run: apt-get update && apt-get install -y cmake ninja-build build-essential binutils bash curl ca-certificates
 
       - name: Download Faust architecture headers
         run: |
           mkdir -p third_party
-          curl -L https://github.com/grame-cncm/faust/archive/refs/heads/master-dev.tar.gz -o third_party/faust.tar.gz
+          curl -fsSL https://github.com/grame-cncm/faust/archive/refs/heads/master-dev.tar.gz -o third_party/faust.tar.gz
           tar -xzf third_party/faust.tar.gz -C third_party
           mkdir -p third_party/faust/include
           cp -r third_party/faust-master-dev/architecture/faust third_party/faust/include/faust
 
       - name: Configure
         run: |
-          cmake -S . -B build-arm64 -G Ninja \
-            -DFAUST_INCLUDE_DIR="$GITHUB_WORKSPACE/third_party/faust/include" \
+          cmake -S . -B build -G Ninja \
+            -DFAUST_INCLUDE_DIR="${FAUST_INCLUDE_DIR}" \
             -DYC20_LV2_BUNDLE_DIR="$HOME/.lv2/foo-yc20.lv2"
 
       - name: Build
-        run: cmake --build build-arm64
+        run: cmake --build build
 
       - name: Verify Pi-compatible linkage
+        if: matrix.arch == 'arm64'
         shell: bash
         run: |
           set -euo pipefail
-          so=build-arm64/foo-yc20.so
-
+          so=build/foo-yc20.so
+          test -f "$so"
           if ldd "$so" | grep -q 'libstdc++'; then
             echo "ERROR: $so still dynamically links libstdc++:" >&2
             ldd "$so" >&2
             exit 1
           fi
-          echo "OK: no dynamic libstdc++ dependency"
-
           max_glibc=$(objdump -T "$so" | grep -oE 'GLIBC_[0-9.]+' | sed 's/GLIBC_//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
           target_glibc="2.36"
-          echo "Max GLIBC symbol version required: ${max_glibc:-none}"
           if [ -n "$max_glibc" ] && [ "$(printf '%s\n' "$max_glibc" "$target_glibc" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" != "$max_glibc" ]; then
-            echo "ERROR: $so requires GLIBC > $target_glibc (too new for Raspberry Pi OS Bookworm)" >&2
-            objdump -T "$so" | grep GLIBC | sort -u >&2
+            echo "ERROR: $so requires GLIBC > $target_glibc" >&2
             exit 1
           fi
-          echo "OK: GLIBC requirement is Pi-compatible (<= $target_glibc)"
 
       - name: Run headless test
-        run: cmake --build build-arm64 --target test-headless
+        run: cmake --build build --target test-headless
 
-      - name: Package LV2 bundle
+      - name: Verify LV2 bundle
+        shell: bash
         run: |
-          mkdir -p dist/foo-yc20.lv2
-          cp build-arm64/foo-yc20.so dist/foo-yc20.lv2/foo-yc20.so
-          cp src/foo-yc20.lv2/foo-yc20.ttl dist/foo-yc20.lv2/foo-yc20.ttl
-          cp build-arm64/foo-yc20.lv2/manifest.ttl dist/foo-yc20.lv2/manifest.ttl
-          (cd dist && zip -r foo-yc20-lv2-linux-arm64.zip foo-yc20.lv2)
-          (cd dist && sha256sum foo-yc20-lv2-linux-arm64.zip > sha256sums.txt)
+          set -euo pipefail
+          bund=build/foo-yc20.lv2
+          test -f "$bund/manifest.ttl"
+          test -f "$bund/foo-yc20.ttl"
+          test -f "$bund/foo-yc20.so"
+          if grep -E '@[A-Za-z0-9_]+@' "$bund/manifest.ttl"; then
+            echo "ERROR: manifest.ttl still has unexpanded CMake placeholders" >&2
+            exit 1
+          fi
+          nm -D "$bund/foo-yc20.so" | grep -q ' lv2_descriptor'
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+  prepare-release:
+    name: Bump version
+    needs: test
+    if: >-
+      github.event_name == 'push'
+      && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+      && !contains(github.event.head_commit.message, '[skip ci]')
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Bump semver
+        id: bump
+        run: |
+          chmod +x scripts/bump-version.sh scripts/update-debian-changelog.sh
+          new="$(./scripts/bump-version.sh patch)"
+          ./scripts/update-debian-changelog.sh "${new}"
+          echo "version=${new}" >> "${GITHUB_OUTPUT}"
+          echo "Bumped to ${new}"
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v6
         with:
-          name: foo-yc20-lv2-linux-arm64
+          name: release-metadata
           path: |
-            dist/foo-yc20-lv2-linux-arm64.zip
-            dist/sha256sums.txt
+            VERSION
+            debian/changelog
+
+  build-deb:
+    name: Build .deb (${{ matrix.arch }})
+    needs: prepare-release
+    runs-on: ${{ matrix.runs-on }}
+    container: debian:bookworm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runs-on: ubuntu-24.04
+          - arch: arm64
+            runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: release-metadata
+
+      - name: Install packaging tools
+        run: |
+          apt-get update
+          apt-get install -y devscripts debhelper cmake ninja-build pkg-config build-essential curl ca-certificates
+
+      - name: Download Faust architecture headers
+        run: |
+          mkdir -p third_party
+          curl -fsSL https://github.com/grame-cncm/faust/archive/refs/heads/master-dev.tar.gz -o third_party/faust.tar.gz
+          tar -xzf third_party/faust.tar.gz -C third_party
+          mkdir -p third_party/faust/include
+          cp -r third_party/faust-master-dev/architecture/faust third_party/faust/include/faust
+
+      - name: Build Debian package
+        run: |
+          export DEB_BUILD_OPTIONS="nocheck noautodbgsym"
+          dpkg-buildpackage -us -uc -b -d
+          mkdir -p dist
+          mv ../lv2-foo-yc20_*.deb dist/
+          ls -la dist/
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v6
+        with:
+          name: deb-${{ matrix.arch }}
+          path: dist/*.deb
+
+  publish-apt:
+    name: Publish APT repo
+    needs:
+      - prepare-release
+      - build-deb
+    runs-on: ubuntu-24.04
+    container: debian:bookworm
+
+    steps:
+      - name: Install packaging tools
+        run: apt-get update && apt-get install -y --no-install-recommends git reprepro ca-certificates
+
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download built packages
+        uses: actions/download-artifact@v7
+        with:
+          pattern: deb-*
+          path: debs
+          merge-multiple: true
+
+      - name: Publish to apt repository
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+          APTREPO_PUSH_TOKEN: ${{ secrets.APTREPO_PUSH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APTREPO_PUSH_TOKEN:-}" ]; then
+            echo "ERROR: APTREPO_PUSH_TOKEN secret is not set on this repository." >&2
+            echo "Create a fine-grained PAT with contents write access to ${APTREPO_SLUG}." >&2
+            exit 1
+          fi
+
+          work="${GITHUB_WORKSPACE}"
+          rm -rf "${work}/aptrepo"
+          git clone "https://x-access-token:${APTREPO_PUSH_TOKEN}@github.com/${APTREPO_SLUG}.git" "${work}/aptrepo"
+          cd "${work}/aptrepo"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            git checkout gh-pages
+          else
+            git checkout --orphan gh-pages
+            git rm -rf . 2>/dev/null || true
+          fi
+
+          mkdir -p conf
+          cp "${work}/packaging/aptrepo-bootstrap/conf/distributions" conf/distributions
+          cp "${work}/packaging/aptrepo-bootstrap/.gitignore" .gitignore
+          cp "${work}/packaging/aptrepo-bootstrap/.nojekyll" .nojekyll
+          sed -i '/^\*\.deb$/d' .gitignore
+
+          shopt -s nullglob
+          debs=("${work}"/debs/lv2-foo-yc20_*.deb)
+          if [ ${#debs[@]} -eq 0 ]; then
+            echo "ERROR: no lv2-foo-yc20 .deb files found in ${work}/debs" >&2
+            exit 1
+          fi
+          for deb in "${debs[@]}"; do
+            echo "Adding ${deb}"
+            reprepro -b . includedeb "${APT_CODENAME}" "${deb}"
+          done
+
+          rm -rf db
+          ls -laR pool/
+          git add -A
+          git add -f pool/
+          if ! git diff --staged --name-only | grep -qE '^pool/.*\.deb$'; then
+            echo "ERROR: no .deb files staged under pool/ (check .gitignore)" >&2
+            exit 1
+          fi
+          if git diff --staged --quiet; then
+            echo "No aptrepo changes to publish"
+          else
+            git commit -m "lv2-foo-yc20 ${VERSION}"
+            git push origin gh-pages
+          fi
+
+  release-tag:
+    name: Tag and GitHub release
+    needs:
+      - prepare-release
+      - build-deb
+      - publish-apt
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download release metadata
+        uses: actions/download-artifact@v7
+        with:
+          name: release-metadata
+
+      - name: Download built packages
+        uses: actions/download-artifact@v7
+        with:
+          pattern: deb-*
+          path: debs
+          merge-multiple: true
+
+      - name: Commit version bump and tag
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare-release.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd "${GITHUB_WORKSPACE}"
+          unset GIT_DIR GIT_WORK_TREE
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION debian/changelog
+          git commit -m "chore(release): v${VERSION} [skip ci]"
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          git push origin HEAD
+          git push origin "v${VERSION}"
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          name: v${{ needs.prepare-release.outputs.version }}
+          files: debs/lv2-foo-yc20_*.deb
+          generate_release_notes: true

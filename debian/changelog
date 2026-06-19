@@ -1,0 +1,5 @@
+foo-yc20 (1.0.0) bookworm; urgency=medium
+
+  * LV2 plugin packaging for Debian (CMake build).
+
+ -- James Mittler <jamesmittlerii@my.smccd.edu>  Thu, 19 Jun 2026 12:00:00 +0000
